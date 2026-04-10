@@ -3,7 +3,7 @@ import { env, createExecutionContext, waitOnExecutionContext, SELF } from 'cloud
 import { describe, it, expect } from 'vitest';
 import worker from '../src/index';
 import { XMLParser } from 'fast-xml-parser';
-import { buildNoteText, getItemStorageKey, normalizeItems } from '../src/index';
+import { buildNoteText, buildRssRequestHeaders, getItemStorageKey, normalizeItems } from '../src/index';
 
 // For now, you'll need to do something like this to get a correctly-typed
 // `Request` to pass to `worker.fetch()`.
@@ -61,5 +61,13 @@ describe('Nagoya news worker', () => {
 		expect(key).toBe(
 			'posted:https%3A%2F%2Fwww.city.nagoya.jp%2Ftest%2Fpath%3Fa%3D1%26b%3D2'
 		);
+	});
+
+	it('builds rss fetch headers for stricter endpoints', () => {
+		const headers = buildRssRequestHeaders() as Record<string, string>;
+		expect(headers.Accept).toContain('application/rss+xml');
+		expect(headers['Accept-Language']).toContain('ja');
+		expect(headers['Cache-Control']).toBe('no-cache');
+		expect(headers['User-Agent']).toContain('nagoya-city-notice-bot');
 	});
 });

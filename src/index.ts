@@ -24,6 +24,7 @@ export interface Env {
 
 const LOCK_NAME = 'rss-sync-lock';
 const POSTED_KEY_PREFIX = 'posted:';
+const RSS_FETCH_USER_AGENT = 'Mozilla/5.0 (compatible; nagoya-city-notice-bot/1.0; +https://github.com/jj1guj/nagoya-city-notice-bot)';
 
 export interface RssItem {
 	title: string;
@@ -59,6 +60,15 @@ export function getItemStorageKey(item: RssItem): string {
 	return `${POSTED_KEY_PREFIX}${encodeURIComponent(item.link)}`;
 }
 
+export function buildRssRequestHeaders(): HeadersInit {
+	return {
+		Accept: 'application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.1',
+		'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8',
+		'Cache-Control': 'no-cache',
+		'User-Agent': RSS_FETCH_USER_AGENT,
+	};
+}
+
 function toComparableDate(pubDate: string | undefined): number {
 	if (!pubDate) {
 		return 0;
@@ -73,9 +83,12 @@ async function fetchFeedItems(env: Env): Promise<RssItem[]> {
 		if (!feedUrl) {
 			throw new Error('RSS_URL or MASUDA_URL is required');
 		}
-		const response = await fetch(feedUrl);
+		const response = await fetch(feedUrl, {
+			headers: buildRssRequestHeaders(),
+		});
 		if (!response.ok) {
-			throw new Error(`Failed to fetch RSS: ${response.status}`);
+			const errorBody = (await response.text()).slice(0, 500);
+			throw new Error(`Failed to fetch RSS: ${response.status} ${errorBody}`.trim());
 		}
 		const xmlText = await response.text();
 		const parser = new XMLParser();
