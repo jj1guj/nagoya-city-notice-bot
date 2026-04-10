@@ -9,6 +9,6 @@ enabled = true
 crons =  ["*/1 * * * *"]
 
 [vars]
-MASUDA_URL = "https://anond.hatelabo.jp/rss"
+RSS_URL = "https://www.city.nagoya.jp/news.rss"
 MISSKEY_HOST = "jiskey.dev"
 MISSKEY_TOKEN = "API_TOKEN"

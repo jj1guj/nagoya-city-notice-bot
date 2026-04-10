@@ -11,70 +11,86 @@
  * Learn more at https://developers.cloudflare.com/workers/
  */
 
-import axios from 'axios';
 import { XMLParser } from 'fast-xml-parser';
 
 export interface Env {
-	MASUDA_URL: string;
+	RSS_URL?: string;
+	MASUDA_URL?: string;
 	MISSKEY_HOST: string;
 	MISSKEY_TOKEN: string;
 }
 
-async function fetchNewArticle(env: Env) {
-	try {
-		const response = await axios.get(env.MASUDA_URL);
-		const parser = new XMLParser();
-		const jsonString = parser.parse(response.data);
+export interface RssItem {
+	title: string;
+	link: string;
+	description?: string;
+	pubDate?: string;
+}
 
-		// 1分前の記事を取得
-		const now_minutes = (60 + new Date().getMinutes() - 1) % 60;
-		const items = jsonString["rdf:RDF"]["item"].filter((item: any) => {
-			const written_minutes = new Date(item["dc:date"]).getMinutes();
-			const title = item["title"];
-			return written_minutes === now_minutes && title.substring(0, 6) !== "anond:";
-		}).reverse();
+export function normalizeItems(parsed: unknown): RssItem[] {
+	const data = parsed as {
+		rss?: {
+			channel?: {
+				item?: RssItem | RssItem[];
+			};
+		};
+	};
+	const rawItems = data.rss?.channel?.item;
+	if (!rawItems) {
+		return [];
+	}
+	return Array.isArray(rawItems) ? rawItems : [rawItems];
+}
+
+export function isRecentlyPublished(pubDate: string | undefined, now: Date): boolean {
+	if (!pubDate) {
+		return false;
+	}
+	const publishedAt = new Date(pubDate);
+	if (Number.isNaN(publishedAt.getTime())) {
+		return false;
+	}
+	const diffMs = now.getTime() - publishedAt.getTime();
+	return diffMs >= 0 && diffMs <= 2 * 60 * 1000;
+}
+
+export function buildNoteText(item: RssItem): string {
+	const description = (item.description ?? '').trim();
+	if (description.length > 0) {
+		return `【名古屋市お知らせ】\n${item.title}\n\n${description}\n${item.link}`;
+	}
+	return `【名古屋市お知らせ】\n${item.title}\n${item.link}`;
+}
+
+async function fetchNewArticle(env: Env): Promise<RssItem[]> {
+	try {
+		const feedUrl = env.RSS_URL ?? env.MASUDA_URL;
+		if (!feedUrl) {
+			throw new Error('RSS_URL or MASUDA_URL is required');
+		}
+		const response = await fetch(feedUrl);
+		if (!response.ok) {
+			throw new Error(`Failed to fetch RSS: ${response.status}`);
+		}
+		const xmlText = await response.text();
+		const parser = new XMLParser();
+		const parsed = parser.parse(xmlText);
+		const now = new Date();
+		const items = normalizeItems(parsed)
+			.filter((item) => item.title && item.link)
+			.filter((item) => isRecentlyPublished(item.pubDate, now))
+			.sort((a, b) => new Date(a.pubDate ?? 0).getTime() - new Date(b.pubDate ?? 0).getTime());
 		return items;
 	} catch (error) {
 		console.error('Error fetching RSS feed:', error);
+		return [];
 	}
 }
 
-function replaceUrlInDescription(description: string, content: string): string {
-	// URLの正規表現パターン
-	const urlPattern = /(https?:\/\/[^\s]+)/g;
-	const matches = description.match(urlPattern);
 
-	if (matches) {
-		// <a>タグからURLを抽出
-		const anchorPattern = /<a\s+[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/g;
-		let match;
-		const urls: string[] = [];
-
-		while ((match = anchorPattern.exec(content)) !== null) {
-			urls.push(match[1]);
-		}
-
-		// description内のURLをcontent内の同じURLで置換
-		matches.forEach(partialUrl => {
-			const escapedPartialUrl = partialUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-			const fullUrlPattern = new RegExp(escapedPartialUrl.replace(/\\\.\\\.\\\./g, '[^\\s<]*'), 'g');
-			const fullUrlMatch = urls.find(url => fullUrlPattern.test(url));
-			if (fullUrlMatch) {
-				description = description.replace(partialUrl, fullUrlMatch);
-			}
-		});
-	}
-
-	return description;
-}
-
-async function postNewArticle(env: Env, items: any) {
+async function postNewArticle(env: Env, items: RssItem[]): Promise<void> {
 	for (let item of items) {
-		const title = item["title"];
-		// description内のURLをcontent:encoded内の同じURLで置換
-		const description = replaceUrlInDescription(item["description"], item["content:encoded"]);
-		const link = item["link"];
-		const post_string = `新しい記事が投稿されました\n\n${title}\n${description}\n${link}`;
+		const postString = buildNoteText(item);
 		await fetch(`https://${env.MISSKEY_HOST}/api/notes/create`, {
 			method: 'POST',
 			headers: {
@@ -92,7 +108,7 @@ async function postNewArticle(env: Env, items: any) {
 				replyId: null,
 				renoteId: null,
 				channelId: null,
-				text: post_string,
+				text: postString,
 			})
 		});
 	}
