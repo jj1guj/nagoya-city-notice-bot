@@ -3,7 +3,7 @@ import { env, createExecutionContext, waitOnExecutionContext, SELF } from 'cloud
 import { describe, it, expect } from 'vitest';
 import worker from '../src/index';
 import { XMLParser } from 'fast-xml-parser';
-import { buildNoteText, buildRssRequestHeaders, getItemStorageKey, normalizeItems } from '../src/index';
+import { buildNoteText, buildRssRequestHeaders, getPendingItems, normalizeItems } from '../src/index';
 
 // For now, you'll need to do something like this to get a correctly-typed
 // `Request` to pass to `worker.fetch()`.
@@ -53,14 +53,25 @@ describe('Nagoya news worker', () => {
 		expect(text).toContain('https://www.city.nagoya.jp/test.html');
 	});
 
-	it('creates stable storage key from item link', () => {
-		const key = getItemStorageKey({
-			title: 'テスト記事',
-			link: 'https://www.city.nagoya.jp/test/path?a=1&b=2'
-		});
-		expect(key).toBe(
-			'posted:https%3A%2F%2Fwww.city.nagoya.jp%2Ftest%2Fpath%3Fa%3D1%26b%3D2'
+	it('collects pending items after the latest seen link', () => {
+		const pendingItems = getPendingItems(
+			[
+				{ title: 'D', link: 'https://example.com/d' },
+				{ title: 'C', link: 'https://example.com/c' },
+				{ title: 'B', link: 'https://example.com/b' },
+				{ title: 'A', link: 'https://example.com/a' },
+			],
+			'https://example.com/a'
 		);
+		expect(pendingItems.map((item) => item.title)).toEqual(['B', 'C', 'D']);
+	});
+
+	it('returns no backlog when latest seen link is not initialized', () => {
+		const pendingItems = getPendingItems(
+			[{ title: 'A', link: 'https://example.com/a' }],
+			null
+		);
+		expect(pendingItems).toEqual([]);
 	});
 
 	it('builds rss fetch headers for stricter endpoints', () => {

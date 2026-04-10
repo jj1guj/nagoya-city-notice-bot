@@ -23,7 +23,7 @@ export interface Env {
 }
 
 const LOCK_NAME = 'rss-sync-lock';
-const POSTED_KEY_PREFIX = 'posted:';
+const LATEST_SEEN_LINK_KEY = 'state:latest_seen_link';
 const RSS_FETCH_USER_AGENT = 'Mozilla/5.0 (compatible; nagoya-city-notice-bot/1.0; +https://github.com/jj1guj/nagoya-city-notice-bot)';
 
 export interface RssItem {
@@ -56,10 +56,6 @@ export function buildNoteText(item: RssItem): string {
 	return `【名古屋市お知らせ】\n${item.title}\n${item.link}`;
 }
 
-export function getItemStorageKey(item: RssItem): string {
-	return `${POSTED_KEY_PREFIX}${encodeURIComponent(item.link)}`;
-}
-
 export function buildRssRequestHeaders(): HeadersInit {
 	return {
 		Accept: 'application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.1',
@@ -75,6 +71,26 @@ function toComparableDate(pubDate: string | undefined): number {
 	}
 	const timestamp = new Date(pubDate).getTime();
 	return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+export function getPendingItems(items: RssItem[], latestSeenLink: string | null): RssItem[] {
+	if (items.length === 0) {
+		return [];
+	}
+
+	if (!latestSeenLink) {
+		return [];
+	}
+
+	const pendingNewestFirst: RssItem[] = [];
+	for (const item of items) {
+		if (item.link === latestSeenLink) {
+			break;
+		}
+		pendingNewestFirst.push(item);
+	}
+
+	return pendingNewestFirst.reverse();
 }
 
 async function fetchFeedItems(env: Env): Promise<RssItem[]> {
@@ -95,7 +111,7 @@ async function fetchFeedItems(env: Env): Promise<RssItem[]> {
 		const parsed = parser.parse(xmlText);
 		const items = normalizeItems(parsed)
 			.filter((item) => item.title && item.link)
-			.sort((a, b) => toComparableDate(a.pubDate) - toComparableDate(b.pubDate));
+			.sort((a, b) => toComparableDate(b.pubDate) - toComparableDate(a.pubDate));
 		return items;
 	} catch (error) {
 		console.error('Error fetching RSS feed:', error);
@@ -138,21 +154,34 @@ async function postNewArticle(env: Env, item: RssItem): Promise<boolean> {
 
 async function syncFeed(env: Env): Promise<void> {
 	const items = await fetchFeedItems(env);
+	if (items.length === 0) {
+		console.log('Sync completed. No RSS items found.');
+		return;
+	}
+
+	const latestFeedLink = items[0].link;
+	const latestSeenLink = await env.POSTED_ITEMS.get(LATEST_SEEN_LINK_KEY);
+	if (!latestSeenLink) {
+		await env.POSTED_ITEMS.put(LATEST_SEEN_LINK_KEY, latestFeedLink);
+		console.log('Initialized latest seen link without posting backlog.');
+		return;
+	}
+
+	const pendingItems = getPendingItems(items, latestSeenLink);
+	if (pendingItems.length === 0) {
+		console.log('Sync completed. No new items to post.');
+		return;
+	}
+
 	let postedCount = 0;
 
-	for (const item of items) {
-		const storageKey = getItemStorageKey(item);
-		const isPosted = await env.POSTED_ITEMS.get(storageKey);
-		if (isPosted) {
-			continue;
-		}
-
+	for (const item of pendingItems) {
 		const isSuccess = await postNewArticle(env, item);
 		if (!isSuccess) {
-			continue;
+			break;
 		}
 
-		await env.POSTED_ITEMS.put(storageKey, new Date().toISOString());
+		await env.POSTED_ITEMS.put(LATEST_SEEN_LINK_KEY, item.link);
 		postedCount += 1;
 	}
 
