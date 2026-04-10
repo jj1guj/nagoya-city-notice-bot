@@ -64,9 +64,13 @@ npx wrangler kv namespace create POSTED_ITEMS --preview
 - `REPLACE_WITH_KV_NAMESPACE_ID`
 - `REPLACE_WITH_KV_PREVIEW_NAMESPACE_ID`
 
-### 5. Misskey トークンを Secret に設定
+### 5. Misskey アクセストークンを Secret に設定
 
 `wrangler.toml` に平文で置かず、Secret として設定してください。
+
+アクセストークン発行時は、少なくとも以下の権限を有効にしてください。
+
+- ノートを作成・削除する
 
 ```bash
 npx wrangler secret put MISSKEY_TOKEN
