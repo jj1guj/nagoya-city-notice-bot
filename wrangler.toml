@@ -12,3 +12,16 @@ crons =  ["*/1 * * * *"]
 RSS_URL = "https://www.city.nagoya.jp/news.rss"
 MISSKEY_HOST = "jiskey.dev"
 MISSKEY_TOKEN = "API_TOKEN"
+
+[[kv_namespaces]]
+binding = "POSTED_ITEMS"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_KV_PREVIEW_NAMESPACE_ID"
+
+[[durable_objects.bindings]]
+name = "SYNC_LOCK"
+class_name = "SyncLock"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SyncLock"]

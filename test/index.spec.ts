@@ -3,7 +3,7 @@ import { env, createExecutionContext, waitOnExecutionContext, SELF } from 'cloud
 import { describe, it, expect } from 'vitest';
 import worker from '../src/index';
 import { XMLParser } from 'fast-xml-parser';
-import { buildNoteText, isRecentlyPublished, normalizeItems } from '../src/index';
+import { buildNoteText, getItemStorageKey, normalizeItems } from '../src/index';
 
 // For now, you'll need to do something like this to get a correctly-typed
 // `Request` to pass to `worker.fetch()`.
@@ -14,7 +14,8 @@ describe('Nagoya news worker', () => {
 		const request = new IncomingRequest('http://example.com');
 		// Create an empty context to pass to `worker.fetch()`.
 		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, env, ctx);
+		const unitEnv = env as unknown as Parameters<typeof worker.fetch>[1];
+		const response = await worker.fetch(request, unitEnv, ctx);
 		// Wait for all `Promise`s passed to `ctx.waitUntil()` to settle before running test assertions
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(404);
@@ -52,10 +53,13 @@ describe('Nagoya news worker', () => {
 		expect(text).toContain('https://www.city.nagoya.jp/test.html');
 	});
 
-	it('recognizes recently published items within 2 minutes', () => {
-		const now = new Date('2026-04-11T00:07:00+09:00');
-		expect(isRecentlyPublished('Sat, 11 Apr 2026 00:06:01 +0900', now)).toBe(true);
-		expect(isRecentlyPublished('Sat, 11 Apr 2026 00:03:59 +0900', now)).toBe(false);
-		expect(isRecentlyPublished(undefined, now)).toBe(false);
+	it('creates stable storage key from item link', () => {
+		const key = getItemStorageKey({
+			title: 'テスト記事',
+			link: 'https://www.city.nagoya.jp/test/path?a=1&b=2'
+		});
+		expect(key).toBe(
+			'posted:https%3A%2F%2Fwww.city.nagoya.jp%2Ftest%2Fpath%3Fa%3D1%26b%3D2'
+		);
 	});
 });

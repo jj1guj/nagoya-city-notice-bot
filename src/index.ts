@@ -18,7 +18,12 @@ export interface Env {
 	MASUDA_URL?: string;
 	MISSKEY_HOST: string;
 	MISSKEY_TOKEN: string;
+	POSTED_ITEMS: KVNamespace;
+	SYNC_LOCK: DurableObjectNamespace;
 }
+
+const LOCK_NAME = 'rss-sync-lock';
+const POSTED_KEY_PREFIX = 'posted:';
 
 export interface RssItem {
 	title: string;
@@ -42,18 +47,6 @@ export function normalizeItems(parsed: unknown): RssItem[] {
 	return Array.isArray(rawItems) ? rawItems : [rawItems];
 }
 
-export function isRecentlyPublished(pubDate: string | undefined, now: Date): boolean {
-	if (!pubDate) {
-		return false;
-	}
-	const publishedAt = new Date(pubDate);
-	if (Number.isNaN(publishedAt.getTime())) {
-		return false;
-	}
-	const diffMs = now.getTime() - publishedAt.getTime();
-	return diffMs >= 0 && diffMs <= 2 * 60 * 1000;
-}
-
 export function buildNoteText(item: RssItem): string {
 	const description = (item.description ?? '').trim();
 	if (description.length > 0) {
@@ -62,7 +55,19 @@ export function buildNoteText(item: RssItem): string {
 	return `【名古屋市お知らせ】\n${item.title}\n${item.link}`;
 }
 
-async function fetchNewArticle(env: Env): Promise<RssItem[]> {
+export function getItemStorageKey(item: RssItem): string {
+	return `${POSTED_KEY_PREFIX}${encodeURIComponent(item.link)}`;
+}
+
+function toComparableDate(pubDate: string | undefined): number {
+	if (!pubDate) {
+		return 0;
+	}
+	const timestamp = new Date(pubDate).getTime();
+	return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+async function fetchFeedItems(env: Env): Promise<RssItem[]> {
 	try {
 		const feedUrl = env.RSS_URL ?? env.MASUDA_URL;
 		if (!feedUrl) {
@@ -75,11 +80,9 @@ async function fetchNewArticle(env: Env): Promise<RssItem[]> {
 		const xmlText = await response.text();
 		const parser = new XMLParser();
 		const parsed = parser.parse(xmlText);
-		const now = new Date();
 		const items = normalizeItems(parsed)
 			.filter((item) => item.title && item.link)
-			.filter((item) => isRecentlyPublished(item.pubDate, now))
-			.sort((a, b) => new Date(a.pubDate ?? 0).getTime() - new Date(b.pubDate ?? 0).getTime());
+			.sort((a, b) => toComparableDate(a.pubDate) - toComparableDate(b.pubDate));
 		return items;
 	} catch (error) {
 		console.error('Error fetching RSS feed:', error);
@@ -88,37 +91,83 @@ async function fetchNewArticle(env: Env): Promise<RssItem[]> {
 }
 
 
-async function postNewArticle(env: Env, items: RssItem[]): Promise<void> {
-	for (let item of items) {
-		const postString = buildNoteText(item);
-		await fetch(`https://${env.MISSKEY_HOST}/api/notes/create`, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json',
-				Authorization: `Bearer ${env.MISSKEY_TOKEN}`
-			},
-			body: JSON.stringify({
-				visibility: 'public',
-				cw: null,
-				localOnly: false,
-				reactionAcceptance: null,
-				noExtractMentions: false,
-				noExtractHashtags: false,
-				noExtractEmojis: false,
-				replyId: null,
-				renoteId: null,
-				channelId: null,
-				text: postString,
-			})
+async function postNewArticle(env: Env, item: RssItem): Promise<boolean> {
+	const postString = buildNoteText(item);
+	const response = await fetch(`https://${env.MISSKEY_HOST}/api/notes/create`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${env.MISSKEY_TOKEN}`
+		},
+		body: JSON.stringify({
+			visibility: 'public',
+			cw: null,
+			localOnly: false,
+			reactionAcceptance: null,
+			noExtractMentions: false,
+			noExtractHashtags: false,
+			noExtractEmojis: false,
+			replyId: null,
+			renoteId: null,
+			channelId: null,
+			text: postString,
+		})
+	});
+
+	if (!response.ok) {
+		const body = await response.text();
+		console.error('Failed to post note:', response.status, body);
+		return false;
+	}
+
+	return true;
+}
+
+async function syncFeed(env: Env): Promise<void> {
+	const items = await fetchFeedItems(env);
+	let postedCount = 0;
+
+	for (const item of items) {
+		const storageKey = getItemStorageKey(item);
+		const isPosted = await env.POSTED_ITEMS.get(storageKey);
+		if (isPosted) {
+			continue;
+		}
+
+		const isSuccess = await postNewArticle(env, item);
+		if (!isSuccess) {
+			continue;
+		}
+
+		await env.POSTED_ITEMS.put(storageKey, new Date().toISOString());
+		postedCount += 1;
+	}
+
+	console.log(`Sync completed. postedCount=${postedCount}`);
+}
+
+export class SyncLock {
+	constructor(private readonly state: DurableObjectState, private readonly env: Env) {}
+
+	async fetch(request: Request): Promise<Response> {
+		if (request.method !== 'POST') {
+			return new Response('Method Not Allowed', { status: 405 });
+		}
+
+		await this.state.blockConcurrencyWhile(async () => {
+			await syncFeed(this.env);
 		});
+
+		return new Response('OK', { status: 200 });
 	}
 }
 
 export default {
 	async scheduled(controller, env, ctx): Promise<void> {
 		console.log('Scheduled task started');
-		const items = await fetchNewArticle(env);
-		await postNewArticle(env, items);
+		const id = env.SYNC_LOCK.idFromName(LOCK_NAME);
+		const stub = env.SYNC_LOCK.get(id);
+		await stub.fetch('https://sync-lock/run', { method: 'POST' });
 	},
 	async fetch(request, env, ctx): Promise<Response> {
 		return new Response("Not Found", { status: 404 });
