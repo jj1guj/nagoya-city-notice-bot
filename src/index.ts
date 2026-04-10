@@ -160,6 +160,8 @@ async function syncFeed(env: Env): Promise<void> {
 }
 
 export class SyncLock {
+	private isRunning = false;
+
 	constructor(private readonly state: DurableObjectState, private readonly env: Env) {}
 
 	async fetch(request: Request): Promise<Response> {
@@ -167,9 +169,17 @@ export class SyncLock {
 			return new Response('Method Not Allowed', { status: 405 });
 		}
 
-		await this.state.blockConcurrencyWhile(async () => {
+		if (this.isRunning) {
+			console.log('Sync already running; skipping duplicate trigger.');
+			return new Response('Already running', { status: 202 });
+		}
+
+		this.isRunning = true;
+		try {
 			await syncFeed(this.env);
-		});
+		} finally {
+			this.isRunning = false;
+		}
 
 		return new Response('OK', { status: 200 });
 	}
