@@ -37,7 +37,15 @@ npm install
 npx wrangler login
 ```
 
-### 3. KV Namespace を作成
+### 3. 設定ファイルを作成
+
+`wrangler.toml.sample` からローカル用の `wrangler.toml` を作成します。
+
+```bash
+cp wrangler.toml.sample wrangler.toml
+```
+
+### 4. KV Namespace を作成
 
 本番用:
 
@@ -56,9 +64,9 @@ npx wrangler kv namespace create POSTED_ITEMS --preview
 - `REPLACE_WITH_KV_NAMESPACE_ID`
 - `REPLACE_WITH_KV_PREVIEW_NAMESPACE_ID`
 
-### 4. Misskey トークンを Secret に設定
+### 5. Misskey トークンを Secret に設定
 
-`wrangler.toml` に平文で置くのではなく Secret を使うことを推奨します。
+`wrangler.toml` に平文で置かず、Secret として設定してください。
 
 ```bash
 npx wrangler secret put MISSKEY_TOKEN
@@ -66,7 +74,7 @@ npx wrangler secret put MISSKEY_TOKEN
 
 補足:
 
-- `wrangler.toml` の `[vars]` に `MISSKEY_TOKEN` がある場合は削除して運用してください。
+- `wrangler.toml` は `.gitignore` されているため、ローカル専用ファイルとして扱います。
 - `MISSKEY_HOST` は `[vars]` のままで問題ありません。
 
 ## デプロイ
@@ -83,7 +91,7 @@ npm test -- --run
 
 ## 主要設定
 
-`wrangler.toml`:
+`wrangler.toml.sample`:
 
 - `name`: Worker 名
 - `triggers.crons`: 実行間隔（現在 `*/1 * * * *`）
