@@ -1,4 +1,4 @@
-name = "masuda-bot"
+name = "nagoya-city-notice-bot"
 main = "src/index.ts"
 compatibility_date = "2025-01-29"
 
