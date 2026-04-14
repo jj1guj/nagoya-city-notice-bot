@@ -181,12 +181,12 @@ async function syncFeed(env: Env): Promise<void> {
 		if (!isSuccess) {
 			break;
 		}
-
-		if (item.link !== lastWrittenLink) {
-			await env.POSTED_ITEMS.put(LATEST_SEEN_LINK_KEY, item.link);
-			lastWrittenLink = item.link;
-		}
+		lastWrittenLink = item.link;
 		postedCount += 1;
+	}
+
+	if (lastWrittenLink !== latestSeenLink) {
+		await env.POSTED_ITEMS.put(LATEST_SEEN_LINK_KEY, lastWrittenLink);
 	}
 
 	console.log(`Sync completed. postedCount=${postedCount}`);
