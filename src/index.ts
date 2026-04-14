@@ -174,6 +174,7 @@ async function syncFeed(env: Env): Promise<void> {
 	}
 
 	let postedCount = 0;
+	let lastWrittenLink = latestSeenLink;
 
 	for (const item of pendingItems) {
 		const isSuccess = await postNewArticle(env, item);
@@ -181,7 +182,10 @@ async function syncFeed(env: Env): Promise<void> {
 			break;
 		}
 
-		await env.POSTED_ITEMS.put(LATEST_SEEN_LINK_KEY, item.link);
+		if (item.link !== lastWrittenLink) {
+			await env.POSTED_ITEMS.put(LATEST_SEEN_LINK_KEY, item.link);
+			lastWrittenLink = item.link;
+		}
 		postedCount += 1;
 	}
 
