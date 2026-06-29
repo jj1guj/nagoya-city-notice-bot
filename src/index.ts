@@ -24,6 +24,7 @@ export interface Env {
 
 const LOCK_NAME = 'rss-sync-lock';
 const LATEST_SEEN_LINK_KEY = 'state:latest_seen_link';
+const LATEST_SEEN_PUBDATE_KEY = 'state:latest_seen_pubdate';
 const RSS_FETCH_USER_AGENT = 'Mozilla/5.0 (compatible; nagoya-city-notice-bot/1.0; +https://github.com/jj1guj/nagoya-city-notice-bot)';
 
 export interface RssItem {
@@ -82,15 +83,30 @@ export function getPendingItems(items: RssItem[], latestSeenLink: string | null)
 		return [];
 	}
 
-	const pendingNewestFirst: RssItem[] = [];
-	for (const item of items) {
-		if (item.link === latestSeenLink) {
-			break;
-		}
-		pendingNewestFirst.push(item);
+	const markerIndex = items.findIndex((item) => item.link === latestSeenLink);
+	if (markerIndex < 0) {
+		// Marker is not present in the current feed window. Caller is expected to
+		// fall back to pubDate-based filtering via getPendingItemsSincePubDate.
+		return [];
 	}
 
-	return pendingNewestFirst.reverse();
+	return items.slice(0, markerIndex).reverse();
+}
+
+export function getPendingItemsSincePubDate(items: RssItem[], latestSeenPubDate: number): RssItem[] {
+	if (items.length === 0) {
+		return [];
+	}
+	if (!Number.isFinite(latestSeenPubDate) || latestSeenPubDate <= 0) {
+		return [];
+	}
+	const newer = items.filter((item) => toComparableDate(item.pubDate) > latestSeenPubDate);
+	// items are sorted newest-first; reverse so callers post oldest-first.
+	return newer.reverse();
+}
+
+export function isMarkerInFeed(items: RssItem[], latestSeenLink: string): boolean {
+	return items.some((item) => item.link === latestSeenLink);
 }
 
 async function fetchFeedItems(env: Env): Promise<RssItem[]> {
@@ -160,14 +176,41 @@ async function syncFeed(env: Env): Promise<void> {
 	}
 
 	const latestFeedLink = items[0].link;
+	const latestFeedPubDate = toComparableDate(items[0].pubDate);
 	const latestSeenLink = await env.POSTED_ITEMS.get(LATEST_SEEN_LINK_KEY);
+	const latestSeenPubDateRaw = await env.POSTED_ITEMS.get(LATEST_SEEN_PUBDATE_KEY);
+	const latestSeenPubDate = latestSeenPubDateRaw ? Number(latestSeenPubDateRaw) : 0;
+
 	if (!latestSeenLink) {
 		await env.POSTED_ITEMS.put(LATEST_SEEN_LINK_KEY, latestFeedLink);
+		if (latestFeedPubDate > 0) {
+			await env.POSTED_ITEMS.put(LATEST_SEEN_PUBDATE_KEY, String(latestFeedPubDate));
+		}
 		console.log('Initialized latest seen link without posting backlog.');
 		return;
 	}
 
-	const pendingItems = getPendingItems(items, latestSeenLink);
+	const markerFound = isMarkerInFeed(items, latestSeenLink);
+	let pendingItems: RssItem[];
+	if (markerFound) {
+		pendingItems = getPendingItems(items, latestSeenLink);
+	} else {
+		console.warn(
+			`Marker link not found in current feed; falling back to pubDate filter. latestSeenLink=${latestSeenLink} latestSeenPubDate=${latestSeenPubDate}`
+		);
+		if (latestSeenPubDate <= 0) {
+			// Legacy state with no pubDate baseline. Realign markers without posting
+			// to avoid the historical "post everything" failure mode.
+			console.warn('No latest_seen_pubdate available; realigning markers without posting.');
+			await env.POSTED_ITEMS.put(LATEST_SEEN_LINK_KEY, latestFeedLink);
+			if (latestFeedPubDate > 0) {
+				await env.POSTED_ITEMS.put(LATEST_SEEN_PUBDATE_KEY, String(latestFeedPubDate));
+			}
+			return;
+		}
+		pendingItems = getPendingItemsSincePubDate(items, latestSeenPubDate);
+	}
+
 	if (pendingItems.length === 0) {
 		console.log('Sync completed. No new items to post.');
 		return;
@@ -175,6 +218,7 @@ async function syncFeed(env: Env): Promise<void> {
 
 	let postedCount = 0;
 	let lastWrittenLink = latestSeenLink;
+	let lastWrittenPubDate = latestSeenPubDate;
 
 	for (const item of pendingItems) {
 		const isSuccess = await postNewArticle(env, item);
@@ -182,11 +226,18 @@ async function syncFeed(env: Env): Promise<void> {
 			break;
 		}
 		lastWrittenLink = item.link;
+		const itemPubDate = toComparableDate(item.pubDate);
+		if (itemPubDate > lastWrittenPubDate) {
+			lastWrittenPubDate = itemPubDate;
+		}
 		postedCount += 1;
 	}
 
 	if (lastWrittenLink !== latestSeenLink) {
 		await env.POSTED_ITEMS.put(LATEST_SEEN_LINK_KEY, lastWrittenLink);
+	}
+	if (lastWrittenPubDate !== latestSeenPubDate && lastWrittenPubDate > 0) {
+		await env.POSTED_ITEMS.put(LATEST_SEEN_PUBDATE_KEY, String(lastWrittenPubDate));
 	}
 
 	console.log(`Sync completed. postedCount=${postedCount}`);

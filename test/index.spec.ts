@@ -3,7 +3,14 @@ import { env, createExecutionContext, waitOnExecutionContext, SELF } from 'cloud
 import { describe, it, expect } from 'vitest';
 import worker from '../src/index';
 import { XMLParser } from 'fast-xml-parser';
-import { buildNoteText, buildRssRequestHeaders, getPendingItems, normalizeItems } from '../src/index';
+import {
+	buildNoteText,
+	buildRssRequestHeaders,
+	getPendingItems,
+	getPendingItemsSincePubDate,
+	isMarkerInFeed,
+	normalizeItems,
+} from '../src/index';
 
 // For now, you'll need to do something like this to get a correctly-typed
 // `Request` to pass to `worker.fetch()`.
@@ -72,6 +79,47 @@ describe('Nagoya news worker', () => {
 			null
 		);
 		expect(pendingItems).toEqual([]);
+	});
+
+	it('returns empty when latest seen link is not in the current feed window', () => {
+		const pendingItems = getPendingItems(
+			[
+				{ title: 'D', link: 'https://example.com/d' },
+				{ title: 'C', link: 'https://example.com/c' },
+				{ title: 'B', link: 'https://example.com/b' },
+			],
+			'https://example.com/a'
+		);
+		expect(pendingItems).toEqual([]);
+	});
+
+	it('detects whether the marker link exists in the current feed', () => {
+		const items = [
+			{ title: 'B', link: 'https://example.com/b' },
+			{ title: 'A', link: 'https://example.com/a' },
+		];
+		expect(isMarkerInFeed(items, 'https://example.com/a')).toBe(true);
+		expect(isMarkerInFeed(items, 'https://example.com/missing')).toBe(false);
+	});
+
+	it('collects pending items strictly newer than the saved pubDate', () => {
+		const items = [
+			{ title: 'D', link: 'https://example.com/d', pubDate: 'Tue, 30 Jun 2026 00:05:00 +0900' },
+			{ title: 'C', link: 'https://example.com/c', pubDate: 'Mon, 29 Jun 2026 12:00:00 +0900' },
+			{ title: 'B', link: 'https://example.com/b', pubDate: 'Sun, 28 Jun 2026 09:00:00 +0900' },
+			{ title: 'A', link: 'https://example.com/a', pubDate: 'Sat, 27 Jun 2026 09:00:00 +0900' },
+		];
+		const threshold = new Date('Sun, 28 Jun 2026 09:00:00 +0900').getTime();
+		const pendingItems = getPendingItemsSincePubDate(items, threshold);
+		expect(pendingItems.map((item) => item.title)).toEqual(['C', 'D']);
+	});
+
+	it('returns empty when pubDate baseline is missing', () => {
+		const items = [
+			{ title: 'A', link: 'https://example.com/a', pubDate: 'Sat, 27 Jun 2026 09:00:00 +0900' },
+		];
+		expect(getPendingItemsSincePubDate(items, 0)).toEqual([]);
+		expect(getPendingItemsSincePubDate(items, Number.NaN)).toEqual([]);
 	});
 
 	it('builds rss fetch headers for stricter endpoints', () => {
